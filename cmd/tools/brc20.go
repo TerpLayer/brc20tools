@@ -13,20 +13,36 @@ import (
 )
 
 func brc20Mint(from string, wif *btcutil.WIF, to string, ticker string, amount string, feerate int64, net *chaincfg.Params) (string, error) {
-	commitPrivkey, err := btcec.NewPrivateKey()
+	commitPrivkey, _ := btcec.NewPrivateKey()
 	//test
 	commitWfi, _ := btcutil.NewWIF(commitPrivkey, net, true)
 	fmt.Println(commitWfi.String())
 	//end test
-	if err != nil {
-		return "", err
-	}
 	contentType := "text/plain;charset=utf-8"
 	body := []byte(fmt.Sprintf(`{"p":"brc-20","op":"%s","tick":"%s","amt":"%s"}`, "mint", ticker, amount))
-	script, _ := brc20.CreateInscriptionScript(
+	return inscribe(from, wif, to, contentType, body, feerate, net)
+}
+
+func inscribeTransfer(from string, wif *btcutil.WIF, to string, ticker string, amount string, feerate int64, net *chaincfg.Params) (string, error) {
+	commitPrivkey, _ := btcec.NewPrivateKey()
+	//test
+	commitWfi, _ := btcutil.NewWIF(commitPrivkey, net, true)
+	fmt.Println(commitWfi.String())
+	//end test
+	contentType := "text/plain;charset=utf-8"
+	body := []byte(fmt.Sprintf(`{"p":"brc-20","op":"%s","tick":"%s","amt":"%s"}`, "transfer", ticker, amount))
+	return inscribe(from, wif, to, contentType, body, feerate, net)
+}
+
+func inscribe(from string, wif *btcutil.WIF, to string, contentType string, body []byte, feerate int64, net *chaincfg.Params) (string, error) {
+	commitPrivkey, _ := btcec.NewPrivateKey()
+	script, err := brc20.CreateInscriptionScript(
 		commitPrivkey,
 		contentType,
 		body)
+	if err != nil {
+		return "", err
+	}
 	commitAddress, err := brc20.NewTapRootAddressWithScript(commitPrivkey, script, net)
 	if err != nil {
 		return "", err

@@ -55,6 +55,12 @@ func main() {
 				Usage:   fmt.Sprintf("mint %s to address", TICK),
 				Action:  mint,
 			},
+			{
+				Name:    "inscribe-transfer",
+				Aliases: []string{"it"},
+				Usage:   fmt.Sprintf("mint %s to address", TICK),
+				Action:  inscribeTransferFunc,
+			},
 		},
 	}
 
@@ -84,12 +90,6 @@ func getWIFs() ([]*btcutil.WIF, error) {
 	wifs = append(wifs, wif3)
 	return wifs, nil
 }
-
-// func getSegWitAddress(wif *btcutil.WIF) string {
-// 	witnessProg := btcutil.Hash160(wif.SerializePubKey())
-// 	addressWitnessPubKeyHash, _ := btcutil.NewAddressWitnessPubKeyHash(witnessProg, NET)
-// 	return addressWitnessPubKeyHash.EncodeAddress()
-// }
 
 func getMultiAddress(wifs []*btcutil.WIF) (string, error) {
 	addressPubKeys := make([]*btcutil.AddressPubKey, 0)
@@ -243,6 +243,45 @@ func mint(ctx context.Context, cli *cli.Command) error {
 	}
 	feerate := int64(2)
 	inscriptionId, err := brc20Mint(from, wifs[1], to, TICK, AMOUNT, feerate, NET)
+	if err != nil {
+		return err
+	}
+	fmt.Println("inscriptionId: ", inscriptionId)
+	return nil
+}
+
+func inscribeTransferFunc(ctx context.Context, cli *cli.Command) error {
+	toIndex := cli.Args().Get(0)
+	index, err := strconv.ParseInt(toIndex, 10, 10)
+	if err != nil {
+		return err
+	}
+	wifs, err := getWIFs()
+	if err != nil {
+		return err
+	}
+	if index < 0 || index > int64(len(wifs)) {
+		return fmt.Errorf("error to index: %s", toIndex)
+	}
+	to := ""
+	if index == int64(len(wifs)) {
+		to, err = getMultiAddress(wifs)
+		if err != nil {
+			return err
+		}
+	} else {
+		to, err = bitcoin.PubKeyToAddr(wifs[index].SerializePubKey(), bitcoin.SEGWIT_NATIVE, NET)
+		if err != nil {
+			return err
+		}
+	}
+	fmt.Printf("to: %v\n", to)
+	from, err := bitcoin.PubKeyToAddr(wifs[1].SerializePubKey(), bitcoin.SEGWIT_NATIVE, NET)
+	if err != nil {
+		return err
+	}
+	feerate := int64(2)
+	inscriptionId, err := inscribeTransfer(from, wifs[1], to, TICK, "100", feerate, NET)
 	if err != nil {
 		return err
 	}
