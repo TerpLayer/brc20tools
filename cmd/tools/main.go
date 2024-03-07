@@ -61,6 +61,12 @@ func main() {
 				Usage:   fmt.Sprintf("mint %s to address", TICK),
 				Action:  inscribeTransferFunc,
 			},
+			{
+				Name:    "list-inscriptions",
+				Aliases: []string{"li"},
+				Usage:   fmt.Sprintf("mint %s to address", TICK),
+				Action:  listInscriptions,
+			},
 		},
 	}
 
@@ -286,5 +292,49 @@ func inscribeTransferFunc(ctx context.Context, cli *cli.Command) error {
 		return err
 	}
 	fmt.Println("inscriptionId: ", inscriptionId)
+	return nil
+}
+
+func listInscriptions(ctx context.Context, cli *cli.Command) error {
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(table.Row{"#", "Address", "Ticker", "InscriptionId", "amount", "Confirmations"})
+	t.AppendSeparator()
+	wifs, err := getWIFs()
+	if err != nil {
+		return err
+	}
+	for i, wif := range wifs {
+		address, err := bitcoin.PubKeyToAddr(wif.SerializePubKey(), bitcoin.SEGWIT_NATIVE, NET)
+		if err != nil {
+			return err
+		}
+		inscriptionRes, err := getTransferAbleInscriptions(address, os.Getenv("INDEXER_AUTH"))
+		if err != nil {
+			return err
+		}
+		if inscriptionRes.Code != 0 {
+			return fmt.Errorf("getInscriptions code: %d", inscriptionRes.Code)
+		}
+		for _, item := range inscriptionRes.Data.Inscriptions {
+			t.AppendRow([]interface{}{i, address, item.Data.Tick, item.InscriptionId, item.Data.Amt, item.Confirmations})
+		}
+	}
+
+	multiAddress, err := getMultiAddress(wifs)
+	if err != nil {
+		return err
+	}
+	inscriptionRes, err := getTransferAbleInscriptions(multiAddress, os.Getenv("INDEXER_AUTH"))
+	if err != nil {
+		return err
+	}
+	if inscriptionRes.Code != 0 {
+		return fmt.Errorf("getInscriptions code: %d", inscriptionRes.Code)
+	}
+	for _, item := range inscriptionRes.Data.Inscriptions {
+		t.AppendRow([]interface{}{3, multiAddress, item.Data.Tick, item.InscriptionId, item.Data.Amt, item.Confirmations})
+	}
+	t.Render()
 	return nil
 }
