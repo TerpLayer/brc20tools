@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -58,14 +60,20 @@ func main() {
 			{
 				Name:    "inscribe-transfer",
 				Aliases: []string{"it"},
-				Usage:   fmt.Sprintf("mint %s to address", TICK),
+				Usage:   "inscribe a transfer inscription to mutilsig address",
 				Action:  inscribeTransferFunc,
 			},
 			{
 				Name:    "list-inscriptions",
 				Aliases: []string{"li"},
-				Usage:   fmt.Sprintf("mint %s to address", TICK),
+				Usage:   "list all inscription on address",
 				Action:  listInscriptions,
+			},
+			{
+				Name:    "send-inscription",
+				Aliases: []string{"s"},
+				Usage:   "send inscription from multisig to address",
+				Action:  sendInscription,
 			},
 		},
 	}
@@ -97,26 +105,26 @@ func getWIFs() ([]*btcutil.WIF, error) {
 	return wifs, nil
 }
 
-func getMultiAddress(wifs []*btcutil.WIF) (string, error) {
+func getMultiAddress(wifs []*btcutil.WIF) (string, []byte, error) {
 	addressPubKeys := make([]*btcutil.AddressPubKey, 0)
 	for _, wif := range wifs {
 		addressPubKey, err := btcutil.NewAddressPubKey(wif.SerializePubKey(), NET)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		addressPubKeys = append(addressPubKeys, addressPubKey)
 	}
 	const nRequired = 2
 	script, err := txscript.MultiSigScript(addressPubKeys, nRequired)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	// log.Printf("redeemScript: %s", hex.EncodeToString(script))
 	addr, err := btcutil.NewAddressScriptHashFromHash(btcutil.Hash160(script), NET)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return addr.EncodeAddress(), nil
+	return addr.EncodeAddress(), script, nil
 }
 
 func keys(ctx context.Context, cmd *cli.Command) error {
@@ -132,7 +140,7 @@ func keys(ctx context.Context, cmd *cli.Command) error {
 		}
 		log.Printf("signer%d's address: %s", i, address)
 	}
-	multiAddress, err := getMultiAddress(wifs)
+	multiAddress, _, err := getMultiAddress(wifs)
 	if err != nil {
 		return err
 	}
@@ -189,7 +197,7 @@ func printBalance(context.Context, *cli.Command) error {
 		}
 		t.AppendRow([]interface{}{i, address, getAddressResp.ChainStats.FundedTxoSum, tickerBalance, transferBalance})
 	}
-	multiAddress, err := getMultiAddress(wifs)
+	multiAddress, _, err := getMultiAddress(wifs)
 	if err != nil {
 		return err
 	}
@@ -232,7 +240,7 @@ func mint(ctx context.Context, cli *cli.Command) error {
 	}
 	to := ""
 	if index == int64(len(wifs)) {
-		to, err = getMultiAddress(wifs)
+		to, _, err = getMultiAddress(wifs)
 		if err != nil {
 			return err
 		}
@@ -271,7 +279,7 @@ func inscribeTransferFunc(ctx context.Context, cli *cli.Command) error {
 	}
 	to := ""
 	if index == int64(len(wifs)) {
-		to, err = getMultiAddress(wifs)
+		to, _, err = getMultiAddress(wifs)
 		if err != nil {
 			return err
 		}
@@ -321,7 +329,7 @@ func listInscriptions(ctx context.Context, cli *cli.Command) error {
 		}
 	}
 
-	multiAddress, err := getMultiAddress(wifs)
+	multiAddress, _, err := getMultiAddress(wifs)
 	if err != nil {
 		return err
 	}
@@ -336,5 +344,71 @@ func listInscriptions(ctx context.Context, cli *cli.Command) error {
 		t.AppendRow([]interface{}{3, multiAddress, item.Data.Tick, item.InscriptionId, item.Data.Amt, item.Confirmations})
 	}
 	t.Render()
+	return nil
+}
+
+func sendInscription(ctx context.Context, cli *cli.Command) error {
+	toIndex := cli.Args().Get(0)
+	index, err := strconv.ParseInt(toIndex, 10, 10)
+	if err != nil {
+		return err
+	}
+	wifs, err := getWIFs()
+	if err != nil {
+		return err
+	}
+	if index < 0 || index > int64(len(wifs)) {
+		return fmt.Errorf("error to index: %s", toIndex)
+	}
+	to := ""
+	if index == int64(len(wifs)) {
+		to, _, err = getMultiAddress(wifs)
+		if err != nil {
+			return err
+		}
+	} else {
+		to, err = bitcoin.PubKeyToAddr(wifs[index].SerializePubKey(), bitcoin.SEGWIT_NATIVE, NET)
+		if err != nil {
+			return err
+		}
+	}
+
+	inscriptionId := cli.Args().Get(1)
+	fmt.Printf("send %s to: %s\n", inscriptionId, to)
+	fromMultiAddress, redeemScript, err := getMultiAddress(wifs)
+	if err != nil {
+		return err
+	}
+	gasWif := wifs[1]
+	feeAddress, _ := bitcoin.PubKeyToAddr(gasWif.SerializePubKey(), bitcoin.SEGWIT_NATIVE, NET)
+	const feerate = 3
+	tx, err := createTx(fromMultiAddress, to, inscriptionId, feeAddress, feerate)
+	if err != nil {
+		return err
+	}
+	tx, err = signGasInput(tx, gasWif, 1)
+	if err != nil {
+		return err
+	}
+	tx, signature, err := signMultiInput(tx, redeemScript, wifs[0], 0)
+	if err != nil {
+		return err
+	}
+	tx, err = signMultiInputFinal(tx, redeemScript, wifs[1], 0, signature)
+	if err != nil {
+		return err
+	}
+	var buffer bytes.Buffer
+	err = tx.Serialize(&buffer)
+	if err != nil {
+		return err
+	}
+
+	// fmt.Println(hex.EncodeToString(buffer.Bytes()))
+	txId, err := postTransaction(hex.EncodeToString(buffer.Bytes()))
+	if err != nil {
+		return err
+	}
+	fmt.Println("txId: ", txId)
 	return nil
 }
